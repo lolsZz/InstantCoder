@@ -17,10 +17,15 @@ function removeCodeFormatting(code: string): string {
 
 export default function Home() {
   let [status, setStatus] = useState<
-    "initial" | "creating" | "created" | "updating" | "updated"
+    "initial" | "creating" | "created" | "updating" | "updated" | "error"
   >("initial");
   let [prompt, setPrompt] = useState("");
+  let [errorMessage, setErrorMessage] = useState<string | null>(null);
   let models = [
+    {
+      label: "gemini-2.5-pro-exp-03-25",
+      value: "gemini-2.5-pro-exp-03-25",
+    },
     {
       label: "gemini-2.0-flash-exp",
       value: "gemini-2.0-flash-exp",
@@ -56,42 +61,58 @@ export default function Home() {
 
     setStatus("creating");
     setGeneratedCode("");
+    setErrorMessage(null);
 
-    let res = await fetch("/api/generateCode", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    try {
+      let res = await fetch("/api/generateCode", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
 
-    if (!res.ok) {
-      throw new Error(res.statusText);
-    }
-
-    if (!res.body) {
-      throw new Error("No response body");
-    }
-
-    const reader = res.body.getReader();
-    let receivedData = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => "Unknown error");
+        setStatus("error");
+        setErrorMessage(`Request failed: ${res.status} ${res.statusText}${errorText ? ` - ${errorText}` : ''}`);
+        return;
       }
-      receivedData += new TextDecoder().decode(value);
-      const cleanedData = removeCodeFormatting(receivedData);
-      setGeneratedCode(cleanedData);
-    }
 
-    setMessages([{ role: "user", content: prompt }]);
-    setInitialAppConfig({ model });
-    setStatus("created");
+      if (!res.body) {
+        setStatus("error");
+        setErrorMessage("No response body received from API");
+        return;
+      }
+
+      const reader = res.body.getReader();
+      let receivedData = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          receivedData += new TextDecoder().decode(value);
+          const cleanedData = removeCodeFormatting(receivedData);
+          setGeneratedCode(cleanedData);
+        }
+
+        setMessages([{ role: "user", content: prompt }]);
+        setInitialAppConfig({ model });
+        setStatus("created");
+      } catch (streamError) {
+        setStatus("error");
+        setErrorMessage(`Error reading response stream: ${streamError instanceof Error ? streamError.message : String(streamError)}`);
+      }
+    } catch (fetchError) {
+      setStatus("error");
+      setErrorMessage(`Network error: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`);
+    }
   }
 
   useEffect(() => {
@@ -195,7 +216,40 @@ export default function Home() {
 
       <hr className="border-1 mb-20 h-px bg-gray-700 dark:bg-gray-700/30" />
 
-      {status !== "initial" && (
+      {status === "error" && errorMessage && (
+        <div className="w-full max-w-xl my-6">
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+            <div className="flex items-start">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-red-800 dark:text-red-200">Error occurred</h3>
+                <div className="mt-2 text-sm text-red-700 dark:text-red-300">
+                  <p>{errorMessage}</p>
+                  <p className="mt-2">This could be due to an issue with the Gemini API or the selected model.</p>
+                </div>
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStatus("initial");
+                      setErrorMessage(null);
+                    }}
+                    className="rounded-md bg-red-50 dark:bg-red-900/30 px-3 py-2 text-sm font-semibold text-red-600 dark:text-red-200 shadow-sm hover:bg-red-100 dark:hover:bg-red-900/50"
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {status !== "initial" && status !== "error" && (
         <motion.div
           initial={{ height: 0 }}
           animate={{
